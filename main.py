@@ -1,51 +1,60 @@
 import streamlit as st
 import pdfplumber
 import pandas as pd
+import re
 
-# Configuração da Página
-st.set_page_config(page_title="Orçamentador de Estruturas", layout="wide")
+st.set_page_config(page_title="Orçamentador Parceiro", layout="wide")
+st.title("🏗️ Orçamentador de Ferragens (Versão 2.0)")
 
-st.title("🏗️ Orçamentador Inteligente de Aço")
-st.write("Suba o PDF do projeto para extrair a relação de aço e gerar o orçamento.")
-
-# 1. Configurações do Usuário
+# Configurações de Preço
 col1, col2 = st.columns(2)
 with col1:
-    preco_kg = st.number_input("Preço do KG do Ferro (R$)", min_value=0.0, value=8.50)
+    preco_kg = st.number_input("Preço do KG do Ferro (R$)", value=8.0)
 with col2:
-    porcentagem_mo = st.number_input("Margem de Mão de Obra (%)", min_value=0.0, value=20.0) / 100
+    margem_mo = st.number_input("Margem Mão de Obra (%)", value=20.0) / 100
 
-# 2. Upload do Ficheiro
-uploaded_file = st.file_uploader("Escolha o arquivo PDF (Planta Estrutural)", type="pdf")
+u_file = st.file_uploader("Suba a planta (PDF)", type="pdf")
 
-if uploaded_file is not None:
+if u_file:
     dados_extraidos = []
     
-    with pdfplumber.open(uploaded_file) as pdf:
+    with pdfplumber.open(u_file) as pdf:
         for page in pdf.pages:
-            # Tenta extrair tabelas da página
-            tabelas = page.extract_table()
-            if tabelas:
-                for linha in tabelas:
-                    # Filtra linhas que pareçam ser de aço (ex: que contenham bitolas)
-                    # Aqui adaptamos conforme o padrão das tuas pranchas [cite: 75, 77]
-                    if linha[0] and any(x in str(linha[0]) for x in ['5.0', '6.3', '8.0', '10.0', '12.5']):
-                        dados_extraidos.append(linha)
+            # Extrai o texto bruto da página para análise
+            texto = page.extract_text()
+            if not texto:
+                continue
+            
+            # Procura por padrões comuns em tabelas de aço (Ex: 10.0  42.5  kg)
+            # Esta expressão regular procura: Bitola -> Espaçamento -> Peso
+            linhas = texto.split('\n')
+            for linha in linhas:
+                # Procura bitolas conhecidas na linha
+                if any(b in linha for b in ['5,0', '6,3', '8,0', '10,0', '12,5', '16,0']):
+                    # Tenta encontrar números que pareçam PESO (ex: 12,50 ou 120.5)
+                    numeros = re.findall(r'\d+[\.,]\d+', linha)
+                    if len(numeros) >= 2:
+                        bitola = numeros[0]
+                        peso = float(numeros[-1].replace(',', '.')) # Assume que o último número da linha é o peso total
+                        
+                        custo_mat = peso * preco_kg
+                        custo_mo = custo_mat * margem_mo
+                        
+                        dados_extraidos.append({
+                            "Bitola (mm)": bitola,
+                            "Peso Lido (kg)": peso,
+                            "Material (R$)": round(custo_mat, 2),
+                            "Mão de Obra (R$)": round(custo_mo, 2),
+                            "Total Item (R$)": round(custo_mat + custo_mo, 2)
+                        })
 
     if dados_extraidos:
-        # Criar DataFrame para organizar os dados
-        df = pd.DataFrame(dados_extraidos)
-        st.subheader("Dados Identificados no Projeto")
-        st.dataframe(df)
+        df = pd.DataFrame(dados_extraidos).drop_duplicates()
+        st.write("### Itens Detectados:")
+        st.table(df)
         
-        # Exemplo de lógica de cálculo simplificada
-        # (Nota: A lógica exata depende de qual coluna do seu PDF é o peso/comprimento)
-        st.success("Tabela de aço processada com sucesso!")
-        
-        # Botão para gerar o orçamento final
-        if st.button("Gerar Orçamento Desmembrado"):
-            st.write("### Resumo do Orçamento")
-            # Aqui entraria a soma total baseada no processamento do PDF
-            st.info("Funcionalidade: O código calcularia o peso total e somaria sua margem de mão de obra.")
+        total_geral = df['Total Item (R$)'].sum()
+        st.success(f"💰 VALOR TOTAL DO ORÇAMENTO: R$ {total_geral:,.2f}")
     else:
-        st.warning("Não foi possível detectar uma tabela de aço clara. Verifique o formato do PDF.")
+        st.error("Não consegui extrair dados automáticos.")
+        st.info("Dica: Se o PDF for uma foto/imagem, o computador não consegue ler o texto. O PDF precisa ser 'selecionável'.")
